@@ -1,9 +1,13 @@
 #include <WiFi.h>
-#include <WiFiClientSecure.h>  
+#include <WiFiClientSecure.h>
+#include <WiFiUdp.h>
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
 #include <ArduinoJson.h>
 #include <TinyGPS++.h>
+#include <NTPClient.h>
+#include <time.h>
+
 
 // WiFi Credentials
 const char* ssid = "Nayatel";
@@ -23,6 +27,10 @@ const char* mqtt_password = "Esp3212345";
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
+// NTP Setup (for accurate timestamps)
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);  // UTC time, updates every 60s
+
 #define LED_BUILTIN 2  // ESP32 onboard LED
 
 void setup() {
@@ -36,8 +44,10 @@ void setup() {
 
   // Setup MQTT
   espClient.setInsecure();  // For accepting unsecure connections => only set for testing
-  client.setServer(mqtt_server, 8883);  // MQTT uses port 1883
-  client.setCallback(callback);  // Function to handle incoming messages
+  client.setServer(mqtt_server, 8883);
+  client.setCallback(callback);
+
+  timeClient.begin();  
 }
 
 void loop() {
@@ -78,12 +88,12 @@ void connectWifi() {
 // Function to Connect to MQTT Broker
 void connectMQTT() {
     Serial.print("Attempting MQTT connection...");
-    String clientId = "ESP32Client-" + String(random(1000));  // Create a unique client ID
+    String clientId = "ESP32Client-" + String(random(1000)); 
     const char* clientIdChar = clientId.c_str();
 if (client.connect(clientIdChar, mqtt_username, mqtt_password)) {
     Serial.println("MQTT connected!");
     client.subscribe("esp32/gps");
-    Serial.println("Subscribed to esp32/gps");  // ✅ Debugging Log
+    Serial.println("Subscribed to esp32/gps"); 
     } else {
       Serial.print("Failed, rc=");
       Serial.print(client.state());
@@ -113,6 +123,7 @@ void callback(char* topic, byte* message, unsigned int length) {
 }
 
 void publishGpsData() {
+  timeClient.update();  // Update time from NTP server
   unsigned long startTime = millis(); // Record start time
   bool gpsDataReceived = false;
 
@@ -135,7 +146,7 @@ void publishGpsData() {
 
   if (gpsDataReceived) {
     StaticJsonDocument<200> jsonDoc;
-    jsonDoc["timestamp"] = millis();
+    jsonDoc["timestamp"] = getFormattedTime();
     jsonDoc["latitude"] = gps.location.lat();
     jsonDoc["longitude"] = gps.location.lng();
 
@@ -148,20 +159,19 @@ void publishGpsData() {
   }
 }
 
+// Function to format time as "YYYY-MM-DD HH:MM:SS"
+String getFormattedTime() {
+    time_t rawTime = timeClient.getEpochTime();  // Get UNIX timestamp
+    struct tm *timeInfo = localtime(&rawTime);  // Convert to readable format
 
+    char formattedTime[25];
+    sprintf(formattedTime, "%04d-%02d-%02dT%02d:%02d:%02dZ", 
+            timeInfo->tm_year + 1900, 
+            timeInfo->tm_mon + 1, 
+            timeInfo->tm_mday, 
+            timeInfo->tm_hour, 
+            timeInfo->tm_min, 
+            timeInfo->tm_sec);
 
-// void getGpsData() {
-//   while (gpsSerial.available() > 0) {
-//         gps.encode(gpsSerial.read());  // Parse GPS data
-//         if (gps.location.isValid()) {
-//           if (gps.location.isUpdated()) {  // New GPS data available
-//             Serial.print("Latitude: "); Serial.println(gps.location.lat(), 6);
-//             Serial.print("Longitude: "); Serial.println(gps.location.lng(), 6);
-//             Serial.print("Speed (km/h): "); Serial.println(gps.speed.kmph());
-//             Serial.print("Altitude (m): "); Serial.println(gps.altitude.meters());
-//             Serial.print("Satellites: "); Serial.println(gps.satellites.value());
-//             Serial.println("----------------------");
-//           }
-//         }
-//     }
-// }
+    return String(formattedTime);
+}
